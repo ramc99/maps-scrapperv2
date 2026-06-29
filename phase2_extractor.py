@@ -1248,7 +1248,7 @@ async def run_website(web_headless: bool = True, workers: int = MAPS_WORKERS,
                       city_filter: str = "", limit: int = 0):
     """Extraction — website only. Reads phase2 CSVs → writes extraction CSVs."""
     global _WEB_SEM
-    _WEB_SEM = asyncio.Semaphore(WEB_SEM_SIZE)
+    _WEB_SEM = asyncio.Semaphore(workers)
     OUTPUT_DIR.mkdir(exist_ok=True)
     EXTRACTION_DIR.mkdir(exist_ok=True)
 
