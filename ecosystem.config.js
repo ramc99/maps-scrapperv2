@@ -10,7 +10,7 @@ module.exports = {
     {
       name: "rc-web",
       script: "/usr/bin/python3",
-      args: "phase2_extractor.py --website rancho_cucamonga",
+      args: "phase2_extractor.py --website rancho_cucamonga --workers=4",
       autorestart: false,
       watch: false,
     },
