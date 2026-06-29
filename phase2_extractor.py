@@ -1118,13 +1118,20 @@ async def process_city_maps(city_slug: str, facilities: list,
 
 async def process_city_website(city_slug: str, query_slug: str = "assisted_living",
                                web_headless: bool = True):
-    """Reads Phase 2 CSV, scrapes websites, writes to outputs/extraction/."""
+    """Reads Phase 2 CSV (falls back to Phase 1), scrapes websites, writes to outputs/extraction/."""
     phase2_csv = PHASE2_DIR / f"{city_slug}_phase2_{query_slug}.csv"
-    if not phase2_csv.exists():
-        log.error("[%s|web] Phase 2 CSV not found: %s", city_slug, phase2_csv)
+    phase1_csv = PHASE1_DIR / f"{city_slug}_phase1_{query_slug}.csv"
+
+    if phase2_csv.exists():
+        src_csv = phase2_csv
+    elif phase1_csv.exists():
+        log.info("[%s|web] Phase2 not ready — reading from phase1: %s", city_slug, phase1_csv.name)
+        src_csv = phase1_csv
+    else:
+        log.error("[%s|web] No phase1 or phase2 CSV found for %s", city_slug, query_slug)
         return
 
-    with open(phase2_csv, newline="", encoding="utf-8") as f:
+    with open(src_csv, newline="", encoding="utf-8") as f:
         facilities = list(csv.DictReader(f))
     if not facilities:
         return
@@ -1237,17 +1244,30 @@ async def run_website(web_headless: bool = True, workers: int = MAPS_WORKERS,
 
     city_slug_filter = _slug(city_filter) if city_filter else ""
     work = []
+    seen_jobs = set()
     for query_slug in QUERY_SLUGS:
-        files = sorted(PHASE2_DIR.glob(f"*_phase2_{query_slug}.csv"))
+        # Collect city slugs from phase2 OR phase1
+        p2_files = sorted(PHASE2_DIR.glob(f"*_phase2_{query_slug}.csv"))
+        p1_files = sorted(PHASE1_DIR.glob(f"*_phase1_{query_slug}.csv"))
+        all_slugs = set()
+        for f in p2_files:
+            all_slugs.add(f.stem.replace(f"_phase2_{query_slug}", ""))
+        for f in p1_files:
+            all_slugs.add(f.stem.replace(f"_phase1_{query_slug}", ""))
         if city_slug_filter:
-            files = [f for f in files if f.stem.startswith(f"{city_slug_filter}_")]
-        for p2 in files:
-            cs = p2.stem.replace(f"_phase2_{query_slug}", "")
+            all_slugs = {s for s in all_slugs if s == city_slug_filter}
+        for cs in sorted(all_slugs):
+            if (cs, query_slug) in seen_jobs:
+                continue
+            seen_jobs.add((cs, query_slug))
+            src = (PHASE2_DIR / f"{cs}_phase2_{query_slug}.csv"
+                   if (PHASE2_DIR / f"{cs}_phase2_{query_slug}.csv").exists()
+                   else PHASE1_DIR / f"{cs}_phase1_{query_slug}.csv")
+            src_rows = sum(1 for _ in src.open(encoding="utf-8")) - 1
             ext = EXTRACTION_DIR / f"{cs}_extraction_{query_slug}.csv"
-            p2_rows = sum(1 for _ in p2.open(encoding="utf-8")) - 1
             if ext.exists():
                 ext_rows = sum(1 for _ in ext.open(encoding="utf-8")) - 1
-                if ext_rows >= p2_rows > 0:
+                if ext_rows >= src_rows > 0:
                     log.info("Skip extraction (done): %s | %s (%d rows)", cs, query_slug, ext_rows)
                     continue
                 log.info("Incomplete extraction — redo: %s | %s", cs, query_slug)
