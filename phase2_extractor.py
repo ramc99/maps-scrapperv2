@@ -132,7 +132,10 @@ def parse_address(full_addr: str) -> dict:
 
 
 def _clean(text, limit=800):
-    return re.sub(r"\s+", " ", text or "").strip()[:limit]
+    text = re.sub(r"\s+", " ", text or "").strip()
+    # Fix mojibake: UTF-8 bytes decoded as Latin-1 (e.g. Â before special chars)
+    text = text.replace("Â ", "").replace("â€™", "'").replace("â€œ", '"').replace("â€", '"')
+    return text[:limit]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -611,35 +614,59 @@ def _extract_description(soup):
 
 def _extract_amenities(soup):
     items, seen = [], set()
-    for kw in ("amenities", "amenity", "features", "services", "care"):
+
+    def _add(name, desc=""):
+        name = _clean(name, 100)
+        if not name or name in seen or len(name) < 3 or len(name) > 80:
+            return
+        # Skip if looks like a sentence (amenity names are short noun phrases)
+        if name.count(" ") > 8:
+            return
+        seen.add(name)
+        items.append({"name": name, "description": _clean(desc, 200)})
+
+    kws = ("amenities", "amenity", "features", "feature", "services",
+           "care", "offering", "highlights", "included", "community")
+    for kw in kws:
         containers = (soup.find_all(["section", "div", "ul"], id=re.compile(kw, re.I))
                       + soup.find_all(["section", "div", "ul"], class_=re.compile(kw, re.I)))
         for container in containers:
+            # li items
             for li in container.find_all("li"):
-                name = _clean(li.get_text(" ", strip=True), 100)
-                if not name or name in seen or len(name) < 3:
-                    continue
-                seen.add(name)
                 desc_el = li.find_next_sibling(["p", "span"]) or li.find(["p", "span"])
                 desc = _clean(desc_el.get_text(" ", strip=True), 200) if desc_el else ""
-                if desc == name:
-                    desc = ""
-                items.append({"name": name, "description": desc})
-            if items:
-                break
+                _add(li.get_text(" ", strip=True), desc)
+            # icon+text patterns (div/span with icon + label)
+            for el in container.find_all(["div", "span"],
+                                         class_=re.compile(r"item|feature|card|icon", re.I)):
+                _add(el.get_text(" ", strip=True))
         if items:
             break
+
+    # Fallback: any ul with 4+ short li items likely an amenity list
+    if not items:
+        for ul in soup.find_all("ul"):
+            lis = ul.find_all("li", recursive=False)
+            if len(lis) >= 4:
+                candidates = [_clean(li.get_text(" ", strip=True), 80) for li in lis]
+                if all(len(c) < 60 for c in candidates if c):
+                    for c in candidates:
+                        _add(c)
+                    if items:
+                        break
+
     return items[:30]
 
 
 def _extract_special_services(soup):
     services, seen = [], set()
-    for kw in ("service", "care", "offering", "program"):
-        for tag in (soup.find_all(["section", "div"], class_=re.compile(kw, re.I))
-                    + soup.find_all(["section", "div"], id=re.compile(kw, re.I))):
-            for p in tag.find_all(["p", "li"]):
-                t = _clean(p.get_text(" ", strip=True), 300)
-                if t and t not in seen and len(t) > 20:
+    for kw in ("service", "care", "level", "offering", "program", "support", "type"):
+        for tag in (soup.find_all(["section", "div", "ul"], class_=re.compile(kw, re.I))
+                    + soup.find_all(["section", "div", "ul"], id=re.compile(kw, re.I))):
+            for el in tag.find_all(["li", "h3", "h4", "strong"]):
+                t = _clean(el.get_text(" ", strip=True), 100)
+                # Keep short noun phrases (care type names, not full paragraphs)
+                if t and t not in seen and 4 < len(t) < 80:
                     seen.add(t)
                     services.append(t)
     return services[:50]
@@ -648,14 +675,19 @@ def _extract_special_services(soup):
 def _extract_faqs(soup):
     faqs, seen = [], set()
 
+    # Answers that look like lists of restaurants/places are not FAQ answers
+    _FAQ_NOISE = re.compile(r"(restaurant|bar|cafe|grill|pizza|cheesecake|sushi|pharmacy|cvs|walgreens)", re.I)
+
     def _add(q, a):
-        # Strip UI noise like "Open Accordion Item" from questions
         q = _UI_NOISE.sub("", q).strip()
         q = _clean(q, 200)
         a = _clean(a, 500)
-        if q and len(q) > 10 and q not in seen:
-            seen.add(q)
-            faqs.append({"question": q, "answer": a})
+        if not q or len(q) < 10 or q in seen:
+            return
+        if _FAQ_NOISE.search(a) and len(a) > 50:
+            a = ""   # strip noisy answer but keep the question
+        seen.add(q)
+        faqs.append({"question": q, "answer": a})
 
     # 1. JSON-LD FAQPage
     for script in soup.find_all("script", type="application/ld+json"):
