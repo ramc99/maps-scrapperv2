@@ -3,6 +3,11 @@ __pycache__/
 *.pyc
 *.pyo
 .env
-outputs/
+outputs/**
+!outputs/phase1/
+outputs/phase1/**
+!outputs/phase1/rancho_cucamonga_phase1_assisted_living.csv
+!outputs/phase1/rancho_cucamonga_phase1_memory_care.csv
+!outputs/phase1/rancho_cucamonga_phase1_independent_living.csv
 dataset_76/
 v2/
